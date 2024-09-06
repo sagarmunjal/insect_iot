@@ -1,13 +1,16 @@
-# Use the official PlatformIO image as a base
-FROM platformio/platformio-core:latest
+FROM python:3.10-alpine
 
-# Install additional dependencies (if needed)
-RUN apt-get update && apt-get install -y \
-    python3-pip \
-    && pip install --upgrade pip
+# Install necessary packages
+RUN apk update && apk add --no-cache \
+    curl \
+    git \
+    build-base
 
-# Ensure PlatformIO is up-to-date
-RUN pio upgrade && pio update
+# Install PlatformIO
+RUN pip install platformio
 
-# Set the work directory to /workspace (GitHub Codespaces standard)
+# Set working directory
 WORKDIR /workspace
+
+# Command to run when the container starts
+CMD ["bash"]

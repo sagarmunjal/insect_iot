@@ -28,11 +28,7 @@ void setup() {
   pinMode(blueLedPin, OUTPUT); // Set the blue LED pin as an output
   pinMode(redLedPin, OUTPUT);  // Set the red LED pin as an output
 
-  // Check if WiFi is connected
-  if (!connectToWiFi()) {
-    Serial.println("No saved Wi-Fi credentials or connection failed. Prompting user...");
-    getWiFiDetails(); // Call the new function to enter credentials
-  }
+  // setup WiFi
   connectToWiFi();   // Connect to Wi-Fi
 
   // Start the Access Point
@@ -65,7 +61,7 @@ void loop() {
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis; // Update previousMillis to the current time
 
-    if (WiFi.status() != WL_CONNECTED) {
+    if (printWiFiStatus()) {
       Serial.println("WiFi connection lost. Attempting to reconnect...");
       connectToWiFi(); // Attempt to reconnect to Wi-Fi
     }
@@ -133,16 +129,29 @@ const char* getEncryptionType(wifi_auth_mode_t encryptionType) {
 
 // Function to connect to Wi-Fi
 bool connectToWiFi() {
-  Serial.println("Connecting to Wi-Fi");
-  preferences.begin("wifiCreds", false);  // Start preferences
-  String savedSSID = preferences.getString("ssid",""); // retrieve saved ssid
-  String savedPassword = preferences.getString("password", ""); // retrieve saved pwd
-  
-  if (savedSSID.length() > 0 && savedPassword.length() > 0){
-    //try if WiFi credentials already saved
-    Serial.println("Connecting to saved WiFi network... " + String(savedSSID));
-    WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("No saved Wi-Fi credentials or connection failed. Prompting user...");
+    getWiFiDetails(); // Call the new function to enter credentials
+  }else{
+    Serial.println("Checking Wi-Fi connection...");
+    preferences.begin("wifiCreds", false);  // Start preferences
+    String savedSSID = preferences.getString("ssid",""); // retrieve saved ssid
+    String savedPassword = preferences.getString("password", ""); // retrieve saved pwd
+    if (savedSSID.length() > 0 && savedPassword.length() > 0){
+      //try if WiFi credentials already saved
+      Serial.println("Connecting to saved WiFi network... " + String(savedSSID));
+      WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+    }
+    printWiFiStatus();
   }
+
+  preferences.end();
+  return false;
+}
+
+
+// Function to print Wi-Fi status
+bool printWiFiStatus() {
   // Check Wi-Fi status
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
@@ -156,28 +165,12 @@ bool connectToWiFi() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConnected to Wi-Fi!");
+    Serial.println("\nConnected to Wi-Fi!" + String(WiFi.SSID()));
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
-    return true;
-  } else {
-    Serial.println("No saved Wi-Fi found.");
-  }
-  preferences.end();
-  return false;
-}
-
-
-// Function to print Wi-Fi status
-void printWiFiStatus() {
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("WiFi : ");
-    Serial.println(WiFi.SSID()); // Print the connected network's name
-
     // Display signal strength as stars
     long rssi = WiFi.RSSI();
     int strength = map(rssi, -90, -30, 0, 8); // Map RSSI to a scale of 0 to 8
-
     Serial.print("Strength : ");
     for (int i = 0; i < strength; i++) {
       Serial.print("*");
@@ -185,9 +178,10 @@ void printWiFiStatus() {
     for (int i = strength; i < 8; i++) {
       Serial.print("-");
     }
-    Serial.println();
+    return true;
   } else {
-    Serial.println("WiFi : Not connected");
+    Serial.println("No saved Wi-Fi found.");
+    return false;
   }
 }
 

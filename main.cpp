@@ -1,218 +1,196 @@
 //Libraries included
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ArduinoOTA.h>
 #include <Preferences.h>  // Library for storing Wi-Fi credentials
+Preferences preferences; //Preferences object to save WiFi credentials
 
 // Define maximum length for SSID and password
 #define MAX_SSID_LEN 32
 #define MAX_PASS_LEN 64
 char ssid[MAX_SSID_LEN];
-char password[MAX_PASS_LEN];
-char command[MAX_SSID_LEN];
-
-Preferences preferences; //Preferences object to save WiFi credentials
-
-//Declarations
-const int blueLedPin = 2;  // Pin for the blue LED
-const int redLedPin = 4;   // Pin for the red LED
+char password[MAX_PASS_LEN]; 
+bool isWiFiConnecting = false; //default false global scope
 const char* apSSID = "ESP32-AP";         // Access Point SSID
 const char* apPassword = "123456789";    // Access Point Password
-unsigned long previousMillis = 0; // Store the last time WiFi status was checked
-const long interval = 30000; // Interval to check WiFi status (10 seconds)
-WebServer server(80);
+bool stateAP = false;
+String debugLog = "";
+
+WebServer server(80);  // Initialize the server on port 80
 
 void setup() {
-  // put your setup code here, to run once:
   Serial.begin(115200);
-  delay(1000);
-  pinMode(blueLedPin, OUTPUT); // Set the blue LED pin as an output
-  pinMode(redLedPin, OUTPUT);  // Set the red LED pin as an output
+  delay(5000);
 
-  // Check if WiFi is connected
-  if (!connectToWiFi()) {
-    Serial.println("No saved Wi-Fi credentials or connection failed. Prompting user...");
-    getWiFiDetails(); // Call the new function to enter credentials
+  WiFi.softAP(apSSID, apPassword);  // Create an access point
+  stateAP = true;
+  logDebugF("Booting....");
+  // setup WiFi
+  if(!connectToWiFi()){
+    logDebugF("Connection failed, requesting new credentials...");
+    getWiFiDetails();
   }
-  connectToWiFi();   // Connect to Wi-Fi
 
-  // Start the Access Point
-  WiFi.softAP(apSSID, apPassword);
-  Serial.println("Access Point:" + String(apSSID) + "started");
+  serverRoutes();
+  server.begin();
+  ArduinoOTASetup(); // setup OTA
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
-  // check for serial input command
-  if (Serial.available() > 0) {
-    // Read the command into a buffer
-    char command[MAX_SSID_LEN];
-    handleAndReadSerial(command, MAX_SSID_LEN);  // This function reads the input
+  if(!WiFi.isConnected() && !isWiFiConnecting){
+    logDebugF("WiFi is not connected, reconnecting..");
+    connectToWiFi();
   }
-  // Check if the access point is active
-  if (WiFi.softAPgetStationNum() > 0) {
-    // Blink the blue LED if there are clients connected to the AP
-    digitalWrite(blueLedPin, HIGH); // Turn the blue LED on
-    delay(500);                     // On for a short time
-    digitalWrite(blueLedPin, LOW);  // Turn the blue LED off
-    delay(500);                     // Off for a short time
-  } else {
-    // No clients connected, keep the blue LED off
-    digitalWrite(blueLedPin, LOW);
-  }
+  server.handleClient();
+  ArduinoOTA.handle();
+}
 
-  // Check Wi-Fi connection status periodically
-  unsigned long currentMillis = millis(); // Get the current time in milliseconds
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis; // Update previousMillis to the current time
+void serverRoutes(){
+  server.on("/",[](){
+    String page = 
+      "<h1>ESP32 HOME PAGE</h1>"
+      "<p>Check network status<a href='/network'>here</a></p>"
+      "<p>Check error codes and logs<a href='/debug'>here</a></p>";
+    server.send(200,"text/html", page);
+  });
+  server.on("/config-wifi",[](){
+    String page = 
+      "<form action='/connect-wifi'>"
+      "<input name='ssid' placeholder='SSID'><br>"
+      "<input name='pass' placeholder='Password'><br>"
+      "<input type='submit' value='Connect'></form>";
+    server.send(200,"text/html", page);
+  });
+  server.on("/connect-wifi",[](){
+    String ssid = server.arg("ssid");
+    String pass = server.arg("pass");
 
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("WiFi connection lost. Attempting to reconnect...");
-      connectToWiFi(); // Attempt to reconnect to Wi-Fi
+    WiFi.begin(ssid.c_str(),pass.c_str());
+    server.send(200, "text/html", "connecting to WiFi....");
+    logDebugF("Attempting to connect to: " + ssid);
+
+    preferences.begin("wifiCreds", false);
+    preferences.putString("ssid",ssid);
+    preferences.putString("password",pass);
+    preferences.end();
+  });
+  server.on("/debug",[](){
+    String page = 
+      "<pre>" + debugLog + "</pre>"
+      "<form action='/clear' method='POST'>"
+        "<button type='submit'>Clear Log</button>"
+      "</form>";
+    server.send(200, "text/html", page);
+  });
+  server.on("/clear",[](){
+    debugLog = "";
+    server.send(200,"text/html","Log cleared! <a href='/debug'>Go back..!!</a>");
+  });
+  server.on("/network",[](){
+    //Load available networks
+    String page = "<h3>Available networks..</h3><ul>";
+    int n = WiFi.scanNetworks();
+    for(int i=0;i<n;i++){
+      String network = WiFi.SSID(i);
+      page += "<li><a href='/select?ssid=" + network + "'>" + network + "(" + String(WiFi.RSSI(i)) + "dBm)</a></li>";
     }
-  }
-}
-
-// Function to handle serial input commands and read serial input
-
-void handleAndReadSerial(char* inputBuffer, size_t maxLength) {
-  char command[MAX_SSID_LEN];  // Buffer for command input
-  size_t index = 0;
-
-  // Wait until there's data available on Serial
-  while (Serial.available() > 0 && index < maxLength - 1) {
-    char c = Serial.read();
-    if (c == '\n') {
-      break; // Stop reading at newline character
+    page += "</ul>";
+    //Show Network Connection status
+    page += "<h3>Network Connection status</h3>";
+    if(WiFi.isConnected()){
+      page += "Connected to: " + WiFi.SSID() + "<br>Signal Strength: " + String(WiFi.RSSI()) + "dBm<br>";
+    }else{
+      page += "Not connected to any Network<br>";
     }
-    command[index++] = c;
-  }
-
-  command[index] = '\0'; // Null-terminate the string
-  // Check the command and trigger the appropriate function
-  if (strcmp(command, "scan") == 0) {
-    scanNetworks();  // Call the function to scan networks
-  } else if (strcmp(command, "wifi-status") == 0) {
-    printWiFiStatus();  // Call the function to check Wi-Fi status
-  } else {
-    Serial.println("Unknown command. Please use 'scan' or 'wifi-status'.");
-  }
+    page += "Access Point: " + String(stateAP ? "Active" : "Inactive");
+    server.send(200, "text/html", page);
+  });
+  server.on("/select",[](){
+    String ssid = server.arg("ssid");
+    String page = 
+      "<h3>Connect to: " + ssid + "</h3>"
+      "<form action='/connect-wifi'>"
+      "<input name='ssid' value='" + ssid + "' readonly><br>"
+      "<input name='pass' placeholder='Password' type='password'><br>"
+      "<input type='submit' value='connect'></form>";
+    server.send(200,"text/html",page);
+  });
 }
 
-// Function to scan available network
-
-void scanNetworks(){
-  Serial.println("Scannning for available networks...");
-  int networkCount = WiFi.scanNetworks();
-  if(networkCount > 0){
-    Serial.printf("%d network(s) found:\n", networkCount);
-    for(int i = 0; i < networkCount; ++i){
-      Serial.printf("%d: SSID: %s, RSSI: %d dBm, Encryption: %s\n", 
-      i+1,
-      WiFi.SSID(i).c_str(),
-      WiFi.RSSI(i),
-      getEncryptionType(WiFi.encryptionType(i))
-      );
-    }
-  }
-  // Clean up to free memory
-  WiFi.scanDelete();
+void logDebugF(String message){
+  Serial.println(message);
+  debugLog += message + "\n";
 }
 
-// Function to return encryption type as a string
-const char* getEncryptionType(wifi_auth_mode_t encryptionType) {
-  switch (encryptionType) {
-    case WIFI_AUTH_OPEN: return "Open";
-    case WIFI_AUTH_WEP: return "WEP";
-    case WIFI_AUTH_WPA_PSK: return "WPA";
-    case WIFI_AUTH_WPA2_PSK: return "WPA2";
-    case WIFI_AUTH_WPA_WPA2_PSK: return "WPA/WPA2";
-    case WIFI_AUTH_WPA2_ENTERPRISE: return "WPA2 Enterprise";
-    default: return "Unknown";
-  }
-}
-
-// Function to connect to Wi-Fi
-bool connectToWiFi() {
-  Serial.println("Connecting to Wi-Fi");
+bool connectToWiFi(){
+  logDebugF("Checking Wi-Fi connection...");
+  isWiFiConnecting = true; //default true local scope
   preferences.begin("wifiCreds", false);  // Start preferences
   String savedSSID = preferences.getString("ssid",""); // retrieve saved ssid
   String savedPassword = preferences.getString("password", ""); // retrieve saved pwd
-  
-  if (savedSSID.length() > 0 && savedPassword.length() > 0){
-    //try if WiFi credentials already saved
-    Serial.println("Connecting to saved WiFi network... " + String(savedSSID));
-    WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+  preferences.end();
+  if (savedSSID.length() == 0 || savedPassword.length() == 0){
+    logDebugF("No saved network found");
+    isWiFiConnecting = false; //reset to false
+    return false;
   }
-  // Check Wi-Fi status
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    //Blink red light while establishing connection
-    digitalWrite(redLedPin, HIGH); // Turn the red LED on
-    delay(100);                     // On for a short time
-    digitalWrite(redLedPin, LOW);  // Turn the red LED off
-    delay(200);                     // Off for a short time
-    Serial.print("...searching for WiFi - attempt : " + String(attempts));
-    attempts++;
+  logDebugF("Saved network found: " + savedSSID + " ..Trying to reconnect");
+  WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+  unsigned long startTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startTime < 10000) {
+    delay(500);  // Wait for connection (up to 10 seconds)
+    logDebugF("Connecting...");
   }
 
+  isWiFiConnecting = false;  // Reset flag
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConnected to Wi-Fi!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    logDebugF("Connected to Wi-Fi: " + savedSSID);
     return true;
   } else {
-    Serial.println("No saved Wi-Fi found.");
-  }
-  preferences.end();
-  return false;
-}
-
-
-// Function to print Wi-Fi status
-void printWiFiStatus() {
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("WiFi : ");
-    Serial.println(WiFi.SSID()); // Print the connected network's name
-
-    // Display signal strength as stars
-    long rssi = WiFi.RSSI();
-    int strength = map(rssi, -90, -30, 0, 8); // Map RSSI to a scale of 0 to 8
-
-    Serial.print("Strength : ");
-    for (int i = 0; i < strength; i++) {
-      Serial.print("*");
-    }
-    for (int i = strength; i < 8; i++) {
-      Serial.print("-");
-    }
-    Serial.println();
-  } else {
-    Serial.println("WiFi : Not connected");
+    logDebugF("Failed to connect.");
+    return false;
   }
 }
 
+    void getWiFiDetails(){
+        //Prompt user to enter WiFi credentials
+        logDebugF("Enter your WiFi SSID: ");
+    }
 
-void getWiFiDetails(){
-  char ssid[MAX_SSID_LEN];
-  char password[MAX_PASS_LEN];
+void ArduinoOTASetup(){
+    ArduinoOTA
+    .onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else {  // U_SPIFFS
+      type = "filesystem";
+    }
 
-  //Prompt user to enter WiFi credentials
-  Serial.println("Enter your WiFi SSID: ");
-  handleAndReadSerial(ssid, MAX_SSID_LEN);
-  Serial.println("Enter your WiFi password: ");
-  handleAndReadSerial(password, MAX_PASS_LEN);
-
-  // Save WiFi credentials using preferences library
-  preferences.begin("wifiCreds", false); // Begin preferences in read write mode
-  preferences.putString("ssid", ssid);
-  preferences.putString("password", password);
-  preferences.end(); 
-
-  Serial.println("WiFi credentials saved successfully");
-   // Attempt to connect to Wi-Fi with the new credentials
-  if (connectToWiFi()) {
-    Serial.println("Successfully connected to Wi-Fi with new credentials.");
-  } else {
-    Serial.println("Failed to connect to Wi-Fi with the entered credentials.");
-  }
+    // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+    logDebugF("Start updating " + type);
+  })
+  .onEnd([]() {
+    logDebugF("\nEnd");
+  })
+  .onProgress([](unsigned int progress, unsigned int total) {
+    int percent = (progress*100) / total;
+    logDebugF("Progress:  " + String(percent) + "%");
+  })
+  .onError([](ota_error_t error) {
+    logDebugF("Error: "+ String(error));
+    if (error == OTA_AUTH_ERROR) {
+      logDebugF("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      logDebugF("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      logDebugF("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      logDebugF("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      logDebugF("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
 }

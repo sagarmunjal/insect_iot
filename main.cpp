@@ -15,6 +15,9 @@ const char* apSSID = "ESP32-AP";         // Access Point SSID
 const char* apPassword = "123456789";    // Access Point Password
 bool stateAP = false;
 String debugLog = "";
+//irrigation system
+const int relayPin = 23;
+const int moisturePin = 35; 
 
 WebServer server(80);  // Initialize the server on port 80
 
@@ -30,6 +33,9 @@ void setup() {
     logDebugF("Connection failed, requesting new credentials...");
     getWiFiDetails();
   }
+  pinMode(relayPin, OUTPUT);  // Set pin as output
+  pinMode(moisturePin, INPUT);  // Set pin as input
+  digitalWrite(relayPin, HIGH);  // Set HIGH to keep relay off
 
   serverRoutes();
   server.begin();
@@ -42,18 +48,89 @@ void loop() {
     logDebugF("WiFi is not connected, reconnecting..");
     connectToWiFi();
   }
+
+  delay(1000);
+
   server.handleClient();
   ArduinoOTA.handle();
 }
-
+//Main Endpoints
 void serverRoutes(){
+  //homepage
   server.on("/",[](){
     String page = 
       "<h1>ESP32 HOME PAGE</h1>"
       "<p>Check network status<a href='/network'>here</a></p>"
+      "<p>Check moisture level status<a href='/moisture-levels'>here</a></p>"
       "<p>Check error codes and logs<a href='/debug'>here</a></p>";
     server.send(200,"text/html", page);
   });
+  //moisture-levels
+  server.on("/moisture-levels",[](){
+    String page =
+      "<h3>Moisture level info</h3>"
+      "<div id='moisture'>Loading moisture data...</div>"
+      "<script>"
+      "function fetchMoistureData(){"
+      " fetch('/moisture-data')"
+      "   .then(response => response.json())"
+      "   .then(data => {"
+      "     document.getElementById('moisture').innerText = data.moisture;"
+      "   })"
+      "   .catch(error => console.error('Error fetching data:', error));"
+      "}"
+      "setInterval(fetchMoistureData,2000);"
+      "</script>";
+    server.send(200,"text/html", page);
+  });
+  //moisture-data
+  server.on("/moisture-data",[](){        
+    int moistureReading = analogRead(moisturePin);
+    String jsonData = "{\"moisture\":" + String(moistureReading) + "}";
+    server.send(200, "application/json", jsonData);
+  });
+  //debug-data
+  server.on("/debug-data", []() {
+    // Escape double quotes and newlines to prevent JSON syntax issues
+    String escapedLog = debugLog;
+    escapedLog.replace("\"", "\\\"");  // Escape double quotes
+    escapedLog.replace("\n", "\\n");   // Escape newlines
+    String jsonData = "{\"log\":\"" + escapedLog + "\"}";
+    server.send(200, "application/json", jsonData);
+  });
+  //debug
+  server.on("/debug",[](){
+    String page = 
+      "<pre id='log'> loading...  </pre>"
+      "<form action='/clear' method='POST'>"
+        "<button type='submit'>Clear Log</button>"
+      "</form>"
+      "<script>"
+        "function updateLog(){"
+        " fetch('/debug-data')"
+        "   .then(response => {"
+        "     if(!response.ok){"
+        "       throw new Error('Internet connection unstable');"
+        "     }"
+        "     return response.json();"
+        "   })"
+        "   .then(data => {"
+        "     console.log('Fetched data:', data);"
+        "     document.getElementById('log').innerText = data.log;"
+        "   })"
+        "   .catch(error => console.error('Error fetching log:', error));"
+        "}"
+        "setInterval(updateLog, 2000);" // fetch updates every 2 minutes
+        "updateLog();"
+      "</script>";
+    server.send(200, "text/html", page);
+  });
+  //clear
+  server.on("/clear",[](){
+    debugLog = "";
+    server.send(200,"text/html","Log cleared! <a href='/debug'>Go back..!!</a>");
+  });
+  //config-wifi
   server.on("/config-wifi",[](){
     String page = 
       "<form action='/connect-wifi'>"
@@ -62,6 +139,7 @@ void serverRoutes(){
       "<input type='submit' value='Connect'></form>";
     server.send(200,"text/html", page);
   });
+  //connect-wifi
   server.on("/connect-wifi",[](){
     String ssid = server.arg("ssid");
     String pass = server.arg("pass");
@@ -75,18 +153,7 @@ void serverRoutes(){
     preferences.putString("password",pass);
     preferences.end();
   });
-  server.on("/debug",[](){
-    String page = 
-      "<pre>" + debugLog + "</pre>"
-      "<form action='/clear' method='POST'>"
-        "<button type='submit'>Clear Log</button>"
-      "</form>";
-    server.send(200, "text/html", page);
-  });
-  server.on("/clear",[](){
-    debugLog = "";
-    server.send(200,"text/html","Log cleared! <a href='/debug'>Go back..!!</a>");
-  });
+  //network
   server.on("/network",[](){
     //Load available networks
     String page = "<h3>Available networks..</h3><ul>";
@@ -106,6 +173,7 @@ void serverRoutes(){
     page += "Access Point: " + String(stateAP ? "Active" : "Inactive");
     server.send(200, "text/html", page);
   });
+  //select
   server.on("/select",[](){
     String ssid = server.arg("ssid");
     String page = 
@@ -117,7 +185,7 @@ void serverRoutes(){
     server.send(200,"text/html",page);
   });
 }
-
+//Main Functions
 void logDebugF(String message){
   Serial.println(message);
   debugLog += message + "\n";
@@ -153,10 +221,10 @@ bool connectToWiFi(){
   }
 }
 
-    void getWiFiDetails(){
-        //Prompt user to enter WiFi credentials
-        logDebugF("Enter your WiFi SSID: ");
-    }
+  void getWiFiDetails(){
+      //Prompt user to enter WiFi credentials
+      logDebugF("Enter your WiFi SSID: ");
+  }
 
 void ArduinoOTASetup(){
     ArduinoOTA

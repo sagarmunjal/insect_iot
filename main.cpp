@@ -70,12 +70,33 @@ void serverRoutes(){
     String page =
       "<h3>Moisture level info</h3>"
       "<div id='moisture'>Loading moisture data...</div>"
+      "<div id='percentage'>Loading percentage data...</div>"
+      "<canvas id='moistureChart' width='400' height='200'></canvas>"
+      "<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js'></script>"
+      "<script src='https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0'></script>"
       "<script>"
+      "const ctx = document.getElementById('moistureChart').getContext('2d');"
+      "const moistureChart = new Chart(ctx, {"
+      " type: 'line',"
+      " data: {labels: [], datasets: [{label: 'Moisture(%)', data: [], borderColor: 'blue', borderWidth: 2 }]},"
+      " options: {scales: {x: {type: 'time', time: {unit: 'second', displayFormats: {second:'h:mm:ss a'}}},"
+      "                    y:{beginAtZero:true, max:100}}}"
+      "});"
+      //function fetch data
       "function fetchMoistureData(){"
       " fetch('/moisture-data')"
       "   .then(response => response.json())"
       "   .then(data => {"
       "     document.getElementById('moisture').innerText = data.moisture;"
+      "     document.getElementById('percentage').innerText = data.percentage + '%';"
+      "     var now = new Date();"
+      "     moistureChart.data.labels.push(now);"
+      "     moistureChart.data.datasets[0].data.push(data.percentage);"
+      "     if(moistureChart.data.labels.length > 15) {"
+      "       moistureChart.data.labels.shift();"
+      "       moistureChart.data.datasets[0].data.shift();"
+      "     }"
+      "     moistureChart.update();"
       "   })"
       "   .catch(error => console.error('Error fetching data:', error));"
       "}"
@@ -86,7 +107,10 @@ void serverRoutes(){
   //moisture-data
   server.on("/moisture-data",[](){        
     int moistureReading = analogRead(moisturePin);
-    String jsonData = "{\"moisture\":" + String(moistureReading) + "}";
+    int moisturePercentage = convertToPercentage(moistureReading);
+    String jsonData = "{";
+    jsonData += "\"moisture\":" + String(moistureReading) + ",";
+    jsonData += "\"percentage\":" + String(moisturePercentage) + "}";
     server.send(200, "application/json", jsonData);
   });
   //debug-data
@@ -213,6 +237,7 @@ bool connectToWiFi(){
 
   isWiFiConnecting = false;  // Reset flag
   if (WiFi.status() == WL_CONNECTED) {
+    logDebugF("Local IP: " + WiFi.localIP().toString());
     logDebugF("Connected to Wi-Fi: " + savedSSID);
     return true;
   } else {
@@ -225,7 +250,12 @@ bool connectToWiFi(){
       //Prompt user to enter WiFi credentials
       logDebugF("Enter your WiFi SSID: ");
   }
-
+int convertToPercentage(int reading){
+  int minReading = 1500;     // wet
+  int maxReading = 4000;     // dry
+  reading = constrain(reading, minReading, maxReading);
+  return map(reading, minReading, maxReading, 0, 100); 
+}
 void ArduinoOTASetup(){
     ArduinoOTA
     .onStart([]() {

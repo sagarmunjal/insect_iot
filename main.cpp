@@ -15,9 +15,12 @@ const char* apSSID = "ESP32-AP";         // Access Point SSID
 const char* apPassword = "123456789";    // Access Point Password
 bool stateAP = false;
 String debugLog = "";
-//irrigation system
+//give pins name
 const int relayPin = 23;
-const int moisturePin = 35; 
+const int moisturePin1 = 35;  // New moisture sensor 1
+const int moisturePin2 = 32;  // New moisture sensor 2
+const int moisturePin3 = 33;  // New moisture sensor 3
+const int moisturePin4 = 34;  // New moisture sensor 4
 
 WebServer server(80);  // Initialize the server on port 80
 
@@ -33,10 +36,14 @@ void setup() {
     logDebugF("Connection failed, requesting new credentials...");
     getWiFiDetails();
   }
+  //set pinmode
   pinMode(relayPin, OUTPUT);  // Set pin as output
-  pinMode(moisturePin, INPUT);  // Set pin as input
+  pinMode(moisturePin1, INPUT);  // Set pin as input
+  pinMode(moisturePin2, INPUT);
+  pinMode(moisturePin3, INPUT);
+  pinMode(moisturePin4, INPUT);
   digitalWrite(relayPin, HIGH);  // Set HIGH to keep relay off
-
+  logDebugF("Relay initialized to OFF state (HIGH).");
   serverRoutes();
   server.begin();
   ArduinoOTASetup(); // setup OTA
@@ -50,7 +57,7 @@ void loop() {
   }
 
   delay(1000);
-
+  controlRelay();
   server.handleClient();
   ArduinoOTA.handle();
 }
@@ -66,12 +73,18 @@ void serverRoutes(){
     server.send(200,"text/html", page);
   });
   //moisture-levels
-  server.on("/moisture-levels",[](){
+  server.on("/moisture-levels", [](){
     String page =
       "<h3>Moisture level info</h3>"
-      "<div id='moisture'>Loading moisture data...</div>"
-      "<div id='percentage'>Loading percentage data...</div>"
-      "<canvas id='moistureChart' width='400' height='200'></canvas>"
+      "<div>Moisture data for Sensor 1 : <span id='moisture1'>loading...</span></div>"
+      "<div>Percentage data for Sensor 1: <span id='percentage1'>loading...</span></div>"
+      "<div>Moisture data for Sensor 2 : <span id='moisture2'>loading...</span></div>"
+      "<div>Percentage data for Sensor 2: <span id='percentage2'>loading...</span></div>"
+      "<div>Moisture data for Sensor 3 : <span id='moisture3'>loading...</span></div>"
+      "<div>Percentage data for Sensor 3: <span id='percentage3'>loading...</span></div>"
+      "<div>Moisture data for Sensor 4 : <span id='moisture4'>loading...</span></div>"
+      "<div>Percentage data for Sensor 4: <span id='percentage4'>loading...</span></div>"
+      "<canvas id='moistureChart' width='200' height='100'></canvas>"
       "<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js'></script>"
       "<script src='https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0'></script>"
       "<script>"
@@ -82,35 +95,55 @@ void serverRoutes(){
       " options: {scales: {x: {type: 'time', time: {unit: 'second', displayFormats: {second:'h:mm:ss a'}}},"
       "                    y:{beginAtZero:true, max:100}}}"
       "});"
-      //function fetch data
       "function fetchMoistureData(){"
       " fetch('/moisture-data')"
       "   .then(response => response.json())"
       "   .then(data => {"
-      "     document.getElementById('moisture').innerText = data.moisture;"
-      "     document.getElementById('percentage').innerText = data.percentage + '%';"
-      "     var now = new Date();"
-      "     moistureChart.data.labels.push(now);"
-      "     moistureChart.data.datasets[0].data.push(data.percentage);"
-      "     if(moistureChart.data.labels.length > 15) {"
-      "       moistureChart.data.labels.shift();"
-      "       moistureChart.data.datasets[0].data.shift();"
-      "     }"
-      "     moistureChart.update();"
-      "   })"
+      "      let averageMoisture = (data.moisture1 + data.moisture2 + data.moisture3 + data.moisture4) / 4;"
+      "      let averagePercentage = (data.percentage1 + data.percentage2 + data.percentage3 + data.percentage4) / 4;"
+      "       document.getElementById('moisture1').innerText = data.moisture1;\n"
+      "       document.getElementById('moisture2').innerText = data.moisture2;\n"
+      "       document.getElementById('moisture3').innerText = data.moisture3;\n"
+      "       document.getElementById('moisture4').innerText = data.moisture4;\n"
+      "       document.getElementById('percentage1').innerText = data.percentage1 + '%';\n"
+      "       document.getElementById('percentage2').innerText = data.percentage2 + '%';\n"
+      "       document.getElementById('percentage3').innerText = data.percentage3 + '%';\n"
+      "       document.getElementById('percentage4').innerText = data.percentage4 + '%';"
+      "       var now = new Date();"
+      "       moistureChart.data.labels.push(now);"
+      "       moistureChart.data.datasets[0].data.push(averagePercentage);"
+      "       if(moistureChart.data.labels.length > 15) {"
+      "         moistureChart.data.labels.shift();"
+      "         moistureChart.data.datasets[0].data.shift();"
+      "       }"
+      "       moistureChart.update();"
+      "    })"
       "   .catch(error => console.error('Error fetching data:', error));"
       "}"
       "setInterval(fetchMoistureData,2000);"
       "</script>";
-    server.send(200,"text/html", page);
-  });
+    server.send(200, "text/html", page);
+});
   //moisture-data
   server.on("/moisture-data",[](){        
-    int moistureReading = analogRead(moisturePin);
-    int moisturePercentage = convertToPercentage(moistureReading);
+    int moistureReading1 = analogRead(moisturePin1);
+    int moistureReading2 = analogRead(moisturePin2);
+    int moistureReading3 = analogRead(moisturePin3);
+    int moistureReading4 = analogRead(moisturePin4);
+    int moisturePercentage1 = convertToPercentage(moistureReading1);
+    int moisturePercentage2 = convertToPercentage(moistureReading2);
+    int moisturePercentage3 = convertToPercentage(moistureReading3);
+    int moisturePercentage4 = convertToPercentage(moistureReading4);
     String jsonData = "{";
-    jsonData += "\"moisture\":" + String(moistureReading) + ",";
-    jsonData += "\"percentage\":" + String(moisturePercentage) + "}";
+      jsonData += "\"moisture1\":" + String(moistureReading1) + ",";
+      jsonData += "\"percentage1\":" + String(moisturePercentage1) + ",";
+      jsonData += "\"moisture2\":" + String(moistureReading2) + ",";
+      jsonData += "\"percentage2\":" + String(moisturePercentage2)+ ",";
+      jsonData += "\"moisture3\":" + String(moistureReading3) + ",";
+      jsonData += "\"percentage3\":" + String(moisturePercentage3)+ ",";
+      jsonData += "\"moisture4\":" + String(moistureReading4) + ",";
+      jsonData += "\"percentage4\":" + String(moisturePercentage4);
+      jsonData += "}";
     server.send(200, "application/json", jsonData);
   });
   //debug-data
@@ -210,6 +243,35 @@ void serverRoutes(){
   });
 }
 //Main Functions
+void controlRelay() {
+  // Read moisture levels
+  int moistureReading1 = analogRead(moisturePin1);
+  int moistureReading2 = analogRead(moisturePin2);
+  int moistureReading3 = analogRead(moisturePin3);
+  int moistureReading4 = analogRead(moisturePin4);
+
+  // Convert readings to percentage
+  int moisturePercentage1 = convertToPercentage(moistureReading1);
+  int moisturePercentage2 = convertToPercentage(moistureReading2);
+  int moisturePercentage3 = convertToPercentage(moistureReading3);
+  int moisturePercentage4 = convertToPercentage(moistureReading4);
+
+  // Calculate average moisture level
+  int averageMoisture = (moisturePercentage1 + moisturePercentage2 + moisturePercentage3 + moisturePercentage4) / 4;
+
+  // Define thresholds
+  int lowerThreshold = 30; // Lower limit
+  int upperThreshold = 70; // Upper limit
+
+  // Relay control logic
+  if (averageMoisture < lowerThreshold) {
+    digitalWrite(relayPin, LOW); // Turn ON the relay
+    logDebugF("Soil is too dry. Relay turned ON.");
+  } else if (averageMoisture > upperThreshold) {
+    digitalWrite(relayPin, HIGH); // Turn OFF the relay
+    logDebugF("Soil is too moist. Relay turned OFF.");
+  }
+}
 void logDebugF(String message){
   Serial.println(message);
   debugLog += message + "\n";
@@ -254,7 +316,7 @@ int convertToPercentage(int reading){
   int minReading = 1500;     // wet
   int maxReading = 4000;     // dry
   reading = constrain(reading, minReading, maxReading);
-  return map(reading, minReading, maxReading, 0, 100); 
+  return map(reading, minReading, maxReading, 100, 0); 
 }
 void ArduinoOTASetup(){
     ArduinoOTA
